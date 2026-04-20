@@ -21,10 +21,13 @@ struct SettingsView: View {
             Text("Connect to Jira")
                 .font(.title2).bold()
 
-            HStack(spacing: 4) {
-                Text("Need a token?")
-                Link("Create one on Atlassian →",
-                     destination: URL(string: "https://id.atlassian.com/manage-profile/security/api-tokens")!)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    Text("Need a token?")
+                    Link("Open Atlassian tokens page →",
+                         destination: URL(string: "https://id.atlassian.com/manage-profile/security/api-tokens")!)
+                }
+                Text("Click \"Create API token\" (not the one with scopes).")
             }
             .font(.footnote)
             .foregroundStyle(.secondary)
