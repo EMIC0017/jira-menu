@@ -4,8 +4,7 @@ import SwiftUI
 struct JiraMenuApp: App {
     var body: some Scene {
         MenuBarExtra {
-            Text("Hello from menubar")
-                .padding()
+            PopoverRootView()
         } label: {
             Image(systemName: "magnifyingglass.circle")
         }
