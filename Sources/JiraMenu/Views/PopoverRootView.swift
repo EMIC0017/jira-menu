@@ -6,13 +6,11 @@ import AppKit
 /// the issue in the user's default browser.
 struct PopoverRootView: View {
     @StateObject private var vm: SearchViewModel
-    @StateObject private var filterStore = ProjectFilterStore()
+    @EnvironmentObject private var filterStore: ProjectFilterStore
+    @EnvironmentObject private var projectsStore: ProjectsStore
+    @Environment(\.openWindow) private var openWindow
     @State private var credentials: Credentials?
     @State private var showSettings = false
-    @State private var showFilter = false
-    @State private var projects: [Project] = []
-    @State private var projectsLoading = false
-    @State private var projectsError: String?
     private let store: KeychainStore
 
     init(store: KeychainStore = KeychainStore()) {
@@ -42,13 +40,21 @@ struct PopoverRootView: View {
                 SettingsView(store: store) { creds in
                     credentials = creds
                     showSettings = false
-                    projects = []  // force reload for new creds
+                    projectsStore.invalidate()
+                    projectsStore.configure {
+                        JiraClient(credentials: creds)
+                    }
                 }
             } else {
                 searchBody
             }
         }
         .frame(width: 460)
+        .onAppear {
+            if let creds = credentials {
+                projectsStore.configure { JiraClient(credentials: creds) }
+            }
+        }
         .onReceive(filterStore.$selected) { keys in
             vm.projectKeys = Array(keys).sorted()
             vm.filterChanged()
@@ -67,8 +73,8 @@ struct PopoverRootView: View {
                     ProgressView().controlSize(.small)
                 }
                 Button {
-                    if projects.isEmpty { Task { await loadProjects() } }
-                    showFilter = true
+                    openWindow(id: "jiramenu.filter")
+                    NSApp.activate(ignoringOtherApps: true)
                 } label: {
                     Image(systemName: filterStore.selected.isEmpty
                           ? "line.3.horizontal.decrease.circle"
@@ -89,19 +95,6 @@ struct PopoverRootView: View {
             Divider()
 
             content
-        }
-        .sheet(isPresented: $showFilter) {
-            FilterSheet(
-                projects: projects,
-                initialSelection: filterStore.selected,
-                isLoading: projectsLoading,
-                errorMessage: projectsError,
-                onApply: { keys in
-                    filterStore.set(keys)
-                    showFilter = false
-                },
-                onCancel: { showFilter = false }
-            )
         }
     }
 
@@ -143,37 +136,24 @@ struct PopoverRootView: View {
     private var idleLists: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                section(
+                ExpandableSection(
                     title: "Assigned to me",
                     issues: vm.assigned,
                     initiallyExpanded: true,
-                    load: { await vm.loadAssigned() }
+                    load: { await vm.loadAssigned() },
+                    openIssue: open(issue:)
                 )
                 Divider()
-                section(
+                ExpandableSection(
                     title: "Watching",
                     issues: vm.watching,
                     initiallyExpanded: false,
-                    load: { await vm.loadWatching() }
+                    load: { await vm.loadWatching() },
+                    openIssue: open(issue:)
                 )
             }
         }
         .frame(maxHeight: 440)
-    }
-
-    private func section(
-        title: String,
-        issues: [Issue],
-        initiallyExpanded: Bool,
-        load: @escaping () async -> Void
-    ) -> some View {
-        ExpandableSection(
-            title: title,
-            issues: issues,
-            initiallyExpanded: initiallyExpanded,
-            load: load,
-            openIssue: open(issue:)
-        )
     }
 
     private func rowButton(_ issue: Issue) -> some View {
@@ -187,18 +167,6 @@ struct PopoverRootView: View {
         guard let creds = credentials else { return }
         let url = creds.siteURL.appendingPathComponent("browse/\(issue.key)")
         NSWorkspace.shared.open(url)
-    }
-
-    private func loadProjects() async {
-        guard let creds = credentials else { return }
-        projectsLoading = true
-        projectsError = nil
-        defer { projectsLoading = false }
-        do {
-            projects = try await JiraClient(credentials: creds).projects()
-        } catch {
-            projectsError = error.localizedDescription
-        }
     }
 }
 
