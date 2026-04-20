@@ -1,0 +1,15 @@
+# macOS
+.DS_Store
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Release artifacts
+build/
+dist/
+*.dmg
+
+# Editor caches
+*.swp
