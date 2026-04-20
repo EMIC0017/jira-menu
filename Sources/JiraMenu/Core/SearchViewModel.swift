@@ -13,6 +13,9 @@ final class SearchViewModel: ObservableObject {
     @Published private(set) var isLoading: Bool = false
     @Published private(set) var errorMessage: String?
 
+    var openResults: [Issue] { results.filter { !$0.isClosed } }
+    var closedResults: [Issue] { results.filter { $0.isClosed } }
+
     typealias IssueLoader = (ParsedInput, [String]) async throws -> [Issue]
     typealias IdleLoader = ([String]) async throws -> [Issue]
 
@@ -98,8 +101,8 @@ final class SearchViewModel: ObservableObject {
         }
     }
 
-    /// Called when the project filter changes — clears both caches so the
-    /// next disclosure-group expand reloads with the new filter applied.
+    /// Called when the project filter changes — clears all idle caches so
+    /// the next disclosure-group expand reloads with the new filter applied.
     func filterChanged() {
         assigned = []
         watching = []

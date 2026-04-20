@@ -1,20 +1,38 @@
 import SwiftUI
-import AppKit
 
-/// Standalone resizable window for picking which projects to search in.
-/// Writes changes through to ProjectFilterStore immediately; the window
-/// persists its size automatically (macOS remembers window frames by id).
-struct FilterWindow: View {
+/// In-popover filter view. Replaces the search body when the user taps the
+/// filter icon. Writes selections through to ProjectFilterStore immediately,
+/// so closing with Back or Done just navigates — nothing to save.
+struct FilterPanel: View {
+    let onDone: () -> Void
+
     @EnvironmentObject private var filter: ProjectFilterStore
     @EnvironmentObject private var projectsStore: ProjectsStore
     @State private var filterText: String = ""
 
     private var filtered: [Project] {
-        guard !filterText.isEmpty else { return projectsStore.projects }
-        let q = filterText.lowercased()
-        return projectsStore.projects.filter {
-            $0.name.lowercased().contains(q) || $0.key.lowercased().contains(q)
+        let base: [Project]
+        if filterText.isEmpty {
+            base = projectsStore.projects
+        } else {
+            let q = filterText.lowercased()
+            base = projectsStore.projects.filter {
+                $0.name.lowercased().contains(q) || $0.key.lowercased().contains(q)
+            }
         }
+        // Pin selected projects to the top, preserving alphabetical order
+        // within each partition. Skip the rearrangement when nothing is
+        // selected so the list stays in its natural order.
+        guard !filter.selected.isEmpty else { return base }
+        let selected = filter.selected
+        let (on, off) = base.reduce(into: ([Project](), [Project]())) { acc, project in
+            if selected.contains(project.key) {
+                acc.0.append(project)
+            } else {
+                acc.1.append(project)
+            }
+        }
+        return on + off
     }
 
     var body: some View {
@@ -28,7 +46,6 @@ struct FilterWindow: View {
             Divider()
             footer
         }
-        .frame(minWidth: 360, minHeight: 320)
         .task { await projectsStore.loadIfNeeded() }
     }
 
@@ -122,14 +139,15 @@ struct FilterWindow: View {
 
     private var footer: some View {
         HStack {
-            Text("Changes apply immediately. Close when you're done.")
+            Button("Back", action: onDone)
+                .keyboardShortcut(.cancelAction)
+            Spacer()
+            Text("Changes apply immediately")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer()
-            Button("Done") {
-                NSApp.keyWindow?.close()
-            }
-            .keyboardShortcut(.defaultAction)
+            Button("Done", action: onDone)
+                .keyboardShortcut(.defaultAction)
         }
         .padding(12)
     }

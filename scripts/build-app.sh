@@ -25,8 +25,20 @@ cp "$BIN_PATH/$APP_NAME" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 # Stamp Info.plist with the version and drop into bundle
 sed "s/__VERSION__/$VERSION/g" scripts/Info.plist > "$APP_BUNDLE/Contents/Info.plist"
 
-# Ad-hoc codesign so macOS will launch it after quarantine is cleared
-codesign --force --deep --sign - "$APP_BUNDLE"
+# Codesign. Prefer a stable self-signed identity (set JIRAMENU_SIGN_IDENTITY,
+# default "JiraMenu Dev") so Keychain ACLs survive rebuilds — ad-hoc signing
+# produces a fresh hash each build and re-prompts on every access.
+# See docs/setup-signing-cert.md for one-time cert creation.
+SIGN_IDENTITY="${JIRAMENU_SIGN_IDENTITY:-JiraMenu Dev}"
+if security find-identity -v -p codesigning 2>/dev/null | grep -q "\"$SIGN_IDENTITY\""; then
+  echo "==> Signing with stable identity: $SIGN_IDENTITY"
+  codesign --force --deep --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
+else
+  echo "==> Identity '$SIGN_IDENTITY' not found in login keychain — using ad-hoc."
+  echo "    To stop Keychain re-prompts on each rebuild, create a code-signing"
+  echo "    cert named '$SIGN_IDENTITY' (see docs/setup-signing-cert.md)."
+  codesign --force --deep --sign - "$APP_BUNDLE"
+fi
 
 echo ""
 echo "Built: $APP_BUNDLE"
