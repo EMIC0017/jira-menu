@@ -78,21 +78,43 @@ struct JiraClient {
     // MARK: - Projects
 
     func projects() async throws -> [Project] {
-        let url = credentials.siteURL
-            .appendingPathComponent("rest/api/3/project/search")
-        var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)!
-        comps.queryItems = [URLQueryItem(name: "maxResults", value: "100")]
-        var request = URLRequest(url: comps.url!)
-        request.httpMethod = "GET"
-        request.setValue(credentials.basicAuthHeader, forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        struct Envelope: Decodable {
+            let values: [Project]
+            let isLast: Bool?
+            let nextPage: String?
+            let total: Int?
+        }
 
-        let (data, response) = try await session.data(for: request)
-        try Self.validate(response)
+        var all: [Project] = []
+        var startAt = 0
+        let pageSize = 50
+        // Hard ceiling so a runaway endpoint can't spin forever.
+        while all.count < 2000 {
+            let url = credentials.siteURL.appendingPathComponent("rest/api/3/project/search")
+            var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+            comps.queryItems = [
+                URLQueryItem(name: "startAt", value: "\(startAt)"),
+                URLQueryItem(name: "maxResults", value: "\(pageSize)"),
+                URLQueryItem(name: "orderBy", value: "name"),
+            ]
+            var request = URLRequest(url: comps.url!)
+            request.httpMethod = "GET"
+            request.setValue(credentials.basicAuthHeader, forHTTPHeaderField: "Authorization")
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
 
-        struct Envelope: Decodable { let values: [Project] }
-        return try JSONDecoder().decode(Envelope.self, from: data).values
-            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            let (data, response) = try await session.data(for: request)
+            try Self.validate(response)
+            let page = try JSONDecoder().decode(Envelope.self, from: data)
+            all.append(contentsOf: page.values)
+
+            let done = page.isLast == true
+                || page.values.count < pageSize
+                || (page.total.map { all.count >= $0 } ?? false)
+            if done { break }
+            startAt += page.values.count
+        }
+
+        return all.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     // MARK: - Internals
