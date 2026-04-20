@@ -21,9 +21,13 @@ struct SettingsView: View {
             Text("Connect to Jira")
                 .font(.title2).bold()
 
-            Text("Create an API token at id.atlassian.com/manage-profile/security/api-tokens")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 4) {
+                Text("Need a token?")
+                Link("Create one on Atlassian →",
+                     destination: URL(string: "https://id.atlassian.com/manage-profile/security/api-tokens")!)
+            }
+            .font(.footnote)
+            .foregroundStyle(.secondary)
 
             Form {
                 TextField("Site URL", text: $siteURL, prompt: Text("https://acme.atlassian.net"))
