@@ -1,6 +1,6 @@
 import Foundation
 
-/// Thin wrapper over Jira Cloud's REST API v3 search endpoint.
+/// Thin wrapper over Jira Cloud's REST API v3.
 /// Uses `POST /rest/api/3/search/jql` with a JSON body — the legacy
 /// `GET /rest/api/3/search` was deprecated in 2024.
 struct JiraClient {
@@ -20,23 +20,84 @@ struct JiraClient {
 
     /// Builds a JQL string appropriate to the parsed input. Returns nil when
     /// we shouldn't hit the network (empty input).
-    static func buildJQL(for input: ParsedInput) -> String? {
+    static func buildJQL(for input: ParsedInput, projectKeys: [String] = []) -> String? {
+        let core: String?
         switch input {
         case .empty:
-            return nil
-        case .issueKey(let key):
-            return "key = \(key)"
-        case .issueURL(let key):
-            return "key = \(key)"
+            core = nil
+        case .issueKey(let key), .issueURL(let key):
+            core = "key = \(key)"
         case .freeText(let text):
             let escaped = text.replacingOccurrences(of: "\"", with: "\\\"")
-            return "text ~ \"\(escaped)\" ORDER BY updated DESC"
+            core = "text ~ \"\(escaped)\""
         }
+        guard let core else { return nil }
+        let filter = projectFilterClause(projectKeys)
+        let where_ = [core, filter].compactMap { $0 }.joined(separator: " AND ")
+        return "\(where_) ORDER BY updated DESC"
     }
 
-    func search(_ input: ParsedInput, maxResults: Int = 25) async throws -> [Issue] {
-        guard let jql = Self.buildJQL(for: input) else { return [] }
+    /// JQL for "issues assigned to the current user", optionally filtered by project.
+    static func assignedToMeJQL(projectKeys: [String] = []) -> String {
+        let base = "assignee = currentUser() AND resolution = Unresolved"
+        return combine(base, projectFilterClause(projectKeys)) + " ORDER BY updated DESC"
+    }
 
+    /// JQL for "issues the current user is watching".
+    static func watchingJQL(projectKeys: [String] = []) -> String {
+        let base = "watcher = currentUser()"
+        return combine(base, projectFilterClause(projectKeys)) + " ORDER BY updated DESC"
+    }
+
+    private static func projectFilterClause(_ keys: [String]) -> String? {
+        guard !keys.isEmpty else { return nil }
+        let list = keys.map { "\"\($0)\"" }.joined(separator: ", ")
+        return "project in (\(list))"
+    }
+
+    private static func combine(_ a: String, _ b: String?) -> String {
+        guard let b else { return a }
+        return "\(a) AND \(b)"
+    }
+
+    // MARK: - Search
+
+    func search(_ input: ParsedInput, projectKeys: [String] = [], maxResults: Int = 25) async throws -> [Issue] {
+        guard let jql = Self.buildJQL(for: input, projectKeys: projectKeys) else { return [] }
+        return try await runJQL(jql, maxResults: maxResults)
+    }
+
+    func assignedToMe(projectKeys: [String] = [], maxResults: Int = 10) async throws -> [Issue] {
+        try await runJQL(Self.assignedToMeJQL(projectKeys: projectKeys), maxResults: maxResults)
+    }
+
+    func watching(projectKeys: [String] = [], maxResults: Int = 10) async throws -> [Issue] {
+        try await runJQL(Self.watchingJQL(projectKeys: projectKeys), maxResults: maxResults)
+    }
+
+    // MARK: - Projects
+
+    func projects() async throws -> [Project] {
+        let url = credentials.siteURL
+            .appendingPathComponent("rest/api/3/project/search")
+        var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        comps.queryItems = [URLQueryItem(name: "maxResults", value: "100")]
+        var request = URLRequest(url: comps.url!)
+        request.httpMethod = "GET"
+        request.setValue(credentials.basicAuthHeader, forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        let (data, response) = try await session.data(for: request)
+        try Self.validate(response)
+
+        struct Envelope: Decodable { let values: [Project] }
+        return try JSONDecoder().decode(Envelope.self, from: data).values
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    // MARK: - Internals
+
+    private func runJQL(_ jql: String, maxResults: Int) async throws -> [Issue] {
         let url = credentials.siteURL.appendingPathComponent("rest/api/3/search/jql")
 
         var request = URLRequest(url: url)
@@ -53,14 +114,18 @@ struct JiraClient {
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, response) = try await session.data(for: request)
+        try Self.validate(response)
+        return try decodeIssues(data)
+    }
+
+    private static func validate(_ response: URLResponse) throws {
         guard let http = response as? HTTPURLResponse else { throw ClientError.decoding }
         guard (200..<300).contains(http.statusCode) else {
             throw ClientError.httpStatus(http.statusCode)
         }
-        return try decode(data)
     }
 
-    private func decode(_ data: Data) throws -> [Issue] {
+    private func decodeIssues(_ data: Data) throws -> [Issue] {
         struct Envelope: Decodable {
             let issues: [RawIssue]
         }

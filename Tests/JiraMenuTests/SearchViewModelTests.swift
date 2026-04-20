@@ -11,7 +11,7 @@ final class SearchViewModelTests: XCTestCase {
 
     func test_emptyQueryYieldsNoResultsAndNoCall() async throws {
         var callCount = 0
-        let vm = SearchViewModel(debounce: debounce) { _ in
+        let vm = SearchViewModel(debounce: debounce) { _, _ in
             callCount += 1
             return []
         }
@@ -23,7 +23,7 @@ final class SearchViewModelTests: XCTestCase {
     }
 
     func test_nonEmptyQueryTriggersSearchAndRanksResults() async throws {
-        let vm = SearchViewModel(debounce: debounce) { [issueA, issueB] input in
+        let vm = SearchViewModel(debounce: debounce) { [issueA, issueB] input, _ in
             XCTAssertEqual(input, .freeText("login"))
             return [issueA, issueB]
         }
@@ -38,7 +38,7 @@ final class SearchViewModelTests: XCTestCase {
         struct Boom: Error, LocalizedError {
             var errorDescription: String? { "boom" }
         }
-        let vm = SearchViewModel(debounce: debounce) { _ in throw Boom() }
+        let vm = SearchViewModel(debounce: debounce) { _, _ in throw Boom() }
         vm.query = "anything"
         try await waitUntil { vm.errorMessage != nil }
         XCTAssertEqual(vm.errorMessage, "boom")
@@ -46,9 +46,30 @@ final class SearchViewModelTests: XCTestCase {
         XCTAssertFalse(vm.isLoading)
     }
 
+    func test_resultsCappedAtTen() async throws {
+        let many = (1...25).map { Issue(key: "AB-\($0)", summary: "login \($0)", status: "Open", issueType: "Bug") }
+        let vm = SearchViewModel(debounce: debounce) { _, _ in many }
+        vm.query = "login"
+        try await waitUntil { vm.results.count >= 10 }
+        XCTAssertEqual(vm.results.count, 10)
+    }
+
+    func test_loadAssignedAndWatching() async {
+        let vm = SearchViewModel(
+            debounce: debounce,
+            search: { _, _ in [] },
+            assigned: { _ in [self.issueA] },
+            watching: { _ in [self.issueB] }
+        )
+        await vm.loadAssigned()
+        await vm.loadWatching()
+        XCTAssertEqual(vm.assigned, [issueA])
+        XCTAssertEqual(vm.watching, [issueB])
+    }
+
     func test_debounceCollapsesRapidKeystrokes() async throws {
         var callCount = 0
-        let vm = SearchViewModel(debounce: .milliseconds(80)) { _ in
+        let vm = SearchViewModel(debounce: .milliseconds(80)) { _, _ in
             callCount += 1
             return []
         }

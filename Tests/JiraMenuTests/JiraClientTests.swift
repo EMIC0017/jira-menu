@@ -20,11 +20,11 @@ final class JiraClientTests: XCTestCase {
     }
 
     func test_buildJQL_issueKeyExactMatch() {
-        XCTAssertEqual(JiraClient.buildJQL(for: .issueKey("PSO-12")), "key = PSO-12")
+        XCTAssertEqual(JiraClient.buildJQL(for: .issueKey("PSO-12")), "key = PSO-12 ORDER BY updated DESC")
     }
 
     func test_buildJQL_issueURLExactMatch() {
-        XCTAssertEqual(JiraClient.buildJQL(for: .issueURL("PSO-12")), "key = PSO-12")
+        XCTAssertEqual(JiraClient.buildJQL(for: .issueURL("PSO-12")), "key = PSO-12 ORDER BY updated DESC")
     }
 
     func test_buildJQL_freeTextUsesTextOperator() {
@@ -35,6 +35,29 @@ final class JiraClientTests: XCTestCase {
     func test_buildJQL_freeTextEscapesQuotes() {
         let jql = JiraClient.buildJQL(for: .freeText("say \"hi\""))
         XCTAssertEqual(jql, "text ~ \"say \\\"hi\\\"\" ORDER BY updated DESC")
+    }
+
+    func test_buildJQL_includesProjectFilter() {
+        let jql = JiraClient.buildJQL(for: .freeText("bug"), projectKeys: ["PSO", "ENG"])
+        XCTAssertEqual(jql, "text ~ \"bug\" AND project in (\"PSO\", \"ENG\") ORDER BY updated DESC")
+    }
+
+    func test_assignedToMeJQL() {
+        XCTAssertEqual(
+            JiraClient.assignedToMeJQL(),
+            "assignee = currentUser() AND resolution = Unresolved ORDER BY updated DESC"
+        )
+        XCTAssertEqual(
+            JiraClient.assignedToMeJQL(projectKeys: ["PSO"]),
+            "assignee = currentUser() AND resolution = Unresolved AND project in (\"PSO\") ORDER BY updated DESC"
+        )
+    }
+
+    func test_watchingJQL() {
+        XCTAssertEqual(
+            JiraClient.watchingJQL(),
+            "watcher = currentUser() ORDER BY updated DESC"
+        )
     }
 
     // MARK: - search (HTTP)
