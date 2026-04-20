@@ -57,26 +57,30 @@ struct FilterSheet: View {
                 } else if let err = errorMessage {
                     Text(err).foregroundStyle(.red).padding(16)
                 } else {
-                    List(filtered, selection: $selection) { project in
-                        HStack {
-                            Toggle(isOn: Binding(
-                                get: { selection.contains(project.key) },
-                                set: { on in
-                                    if on { selection.insert(project.key) }
-                                    else { selection.remove(project.key) }
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(filtered) { project in
+                                Toggle(isOn: Binding(
+                                    get: { selection.contains(project.key) },
+                                    set: { on in
+                                        if on { selection.insert(project.key) }
+                                        else { selection.remove(project.key) }
+                                    }
+                                )) {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(project.name)
+                                        Text(project.key)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
                                 }
-                            )) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(project.name)
-                                    Text(project.key)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
+                                .toggleStyle(.checkbox)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 6)
+                                Divider()
                             }
-                            .toggleStyle(.checkbox)
                         }
                     }
-                    .listStyle(.plain)
                 }
             }
             .frame(minHeight: 260)
