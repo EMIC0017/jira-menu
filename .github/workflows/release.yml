@@ -85,8 +85,11 @@ jobs:
             Install via Homebrew:
             ```
             brew tap EMIC0017/jira-menu
-            brew install --cask --no-quarantine jira-menu
+            brew install --cask jira-menu
             ```
+            The cask strips the macOS quarantine attribute in `postflight`,
+            so the first launch doesn't trigger the "Apple cannot check
+            this app for malware" dialog.
 
       - name: Bump Homebrew tap cask
         if: env.TAP_REPO_TOKEN != ''
