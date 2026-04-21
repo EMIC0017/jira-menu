@@ -23,6 +23,13 @@ permissions:
 jobs:
   release:
     runs-on: macos-14
+    # Hoist TAP_REPO_TOKEN to job-level env so step-level `if:` can read
+    # it via the env context. GitHub Actions disallows the `secrets`
+    # context inside step-level `if:` expressions (for audit-trail
+    # reasons — keeps secret names out of pre-evaluation logs), but
+    # `env` is fair game.
+    env:
+      TAP_REPO_TOKEN: ${{ secrets.TAP_REPO_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -77,9 +84,8 @@ jobs:
             ```
 
       - name: Bump Homebrew tap cask
-        if: ${{ secrets.TAP_REPO_TOKEN != '' }}
+        if: env.TAP_REPO_TOKEN != ''
         env:
-          TAP_REPO_TOKEN: ${{ secrets.TAP_REPO_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           # Clone the tap repo using the PAT, rewrite version + sha256 lines
