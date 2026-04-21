@@ -31,7 +31,10 @@ jobs:
     # reasons — keeps secret names out of pre-evaluation logs), but
     # `env` is fair game.
     env:
-      TAP_REPO_TOKEN: ${{ secrets.TAP_REPO_TOKEN }}
+      # Secret is stored in the repo under the name `jiramenu_bump` — we
+      # alias it to TAP_REPO_TOKEN here so the rest of the job keeps
+      # reading a semantically named env var.
+      TAP_REPO_TOKEN: ${{ secrets.jiramenu_bump }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
