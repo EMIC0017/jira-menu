@@ -25,6 +25,17 @@ cp "$BIN_PATH/$APP_NAME" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 # Stamp Info.plist with the version and drop into bundle
 sed "s/__VERSION__/$VERSION/g" scripts/Info.plist > "$APP_BUNDLE/Contents/Info.plist"
 
+# Copy bundled resources (menubar icon PNG, etc) into Contents/Resources
+# so Bundle.main.url(forResource:…) can find them at runtime. SwiftPM's
+# executable targets don't expose a clean way to forward resources into a
+# manually-assembled .app, so we just stage them ourselves. `.DS_Store`
+# files get filtered out so Finder metadata doesn't leak into shipped
+# builds.
+RES_SRC="Sources/JiraMenu/Resources"
+if [ -d "$RES_SRC" ]; then
+  rsync -a --exclude='.DS_Store' "$RES_SRC/" "$APP_BUNDLE/Contents/Resources/"
+fi
+
 # Codesign. Prefer a stable self-signed identity (set JIRAMENU_SIGN_IDENTITY,
 # default "JiraMenu Dev") so Keychain ACLs survive rebuilds — ad-hoc signing
 # produces a fresh hash each build and re-prompts on every access.
