@@ -94,11 +94,19 @@ struct JiraClient {
         case .empty:
             return []
         case .issueKey(let key):
-            // Partial keys ("ETS-4" → "ETS-45") need prefix matching on the key field,
-            // which JQL doesn't expose directly. Picker is Jira's own autocomplete for
-            // this; its history bias is fine here since users typically look up keys
-            // they've been working on.
-            return try await pickerSearch(query: key, projectKeys: projectKeys, maxResults: maxResults)
+            // Two complementary lookups in parallel:
+            //   1. Exact `key = X` JQL — finds any ticket the user has permission
+            //      to see, including brand-new ones they've never interacted with.
+            //   2. `/issue/picker` autocomplete — handles partial keys ("ETS-4"
+            //      → "ETS-45") via prefix match, but is history-biased and
+            //      often misses fresh tickets the user hasn't viewed yet.
+            // Merging with exact-first guarantees a freshly-created ticket like
+            // PSO-76963 (linked in Slack, never opened by the user) shows up at
+            // the top while prefix matches still fill in below.
+            async let exactTask = exactKeyLookup(key, projectKeys: projectKeys)
+            async let prefixTask = pickerSearch(query: key, projectKeys: projectKeys, maxResults: maxResults)
+            let (exact, prefix) = await (exactTask, try prefixTask)
+            return Self.mergeUnique(exact, prefix)
         case .issueURL:
             guard let jql = Self.buildJQL(for: input, projectKeys: projectKeys) else { return [] }
             return try await runJQL(jql, maxResults: maxResults)
@@ -127,6 +135,17 @@ struct JiraClient {
             }
         }
         return merged
+    }
+
+    /// Best-effort `key = X` JQL lookup. Returns `[]` on any failure so the
+    /// caller can safely merge with picker results — if the picker also
+    /// fails, the caller surfaces that error and the user gets feedback.
+    /// Swallowing errors here specifically (and not in pickerSearch) is a
+    /// deliberate asymmetry: picker is the primary historical path; exact
+    /// lookup is the safety net that fixes the "brand-new ticket" case.
+    private func exactKeyLookup(_ key: String, projectKeys: [String]) async -> [Issue] {
+        let jql = Self.buildJQL(for: .issueKey(key), projectKeys: projectKeys) ?? "key = \(key)"
+        return (try? await runJQL(jql, maxResults: 1)) ?? []
     }
 
     /// Uses `/rest/api/3/issue/picker` for relevance-ranked prefix/fuzzy matching,

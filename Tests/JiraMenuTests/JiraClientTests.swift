@@ -227,9 +227,15 @@ final class JiraClientTests: XCTestCase {
                       "missing personal JQL in \(seenJQLs)")
     }
 
-    func test_search_issueKey_routesThroughPickerThenHydrates() async throws {
+    func test_search_issueKey_routesThroughPickerAndExactThenHydrates() async throws {
+        // issueKey search now runs two calls in parallel:
+        //   - GET /issue/picker for prefix/autocomplete matches.
+        //   - POST /search/jql with `key = X` as an exact-match safety net.
+        // Then whichever one has hits gets hydrated via POST /search/jql
+        // with `key in (...)`. So we expect up to 3 requests: 1 GET, 2 POSTs.
         var pickerRequest: URLRequest?
-        var hydrateRequest: URLRequest?
+        var jqlPOSTs: [(request: URLRequest, jql: String)] = []
+        let jqlLock = NSLock()
 
         MockURLProtocol.handler = { req in
             let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
@@ -238,13 +244,25 @@ final class JiraClientTests: XCTestCase {
                 let body = #"{"sections":[{"issues":[{"key":"ETS-4"},{"key":"ETS-45"}]}]}"#.data(using: .utf8)!
                 return (resp, body)
             }
-            hydrateRequest = req
-            let body = """
-            {"issues":[
-              {"key":"ETS-4","fields":{"summary":"a","status":{"name":"Open"},"issuetype":{"name":"Bug"}}},
-              {"key":"ETS-45","fields":{"summary":"b","status":{"name":"Done"},"issuetype":{"name":"Task"},"resolution":{"name":"Done"}}}
-            ]}
-            """.data(using: .utf8)!
+            // Classify the JQL POST by reading the body.
+            let bodyData = Self.readBody(from: req) ?? Data()
+            let json = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any]
+            let jql = (json?["jql"] as? String) ?? ""
+            jqlLock.lock(); jqlPOSTs.append((req, jql)); jqlLock.unlock()
+
+            // Respond based on what the JQL is asking for.
+            let body: Data
+            if jql.contains("key = ETS-4 ") || jql.hasPrefix("key = ETS-4 ") || jql == "key = ETS-4" {
+                body = #"{"issues":[{"key":"ETS-4","fields":{"summary":"a","status":{"name":"Open"},"issuetype":{"name":"Bug"}}}]}"#.data(using: .utf8)!
+            } else {
+                // hydrate `key in (...)`
+                body = """
+                {"issues":[
+                  {"key":"ETS-4","fields":{"summary":"a","status":{"name":"Open"},"issuetype":{"name":"Bug"}}},
+                  {"key":"ETS-45","fields":{"summary":"b","status":{"name":"Done"},"issuetype":{"name":"Task"},"resolution":{"name":"Done"}}}
+                ]}
+                """.data(using: .utf8)!
+            }
             return (resp, body)
         }
 
@@ -256,15 +274,40 @@ final class JiraClientTests: XCTestCase {
         XCTAssertEqual(picker.url?.path, "/rest/api/3/issue/picker")
         XCTAssertEqual(picker.url?.query?.contains("query=ETS-4"), true)
 
-        let hydrate = try XCTUnwrap(hydrateRequest)
-        XCTAssertEqual(hydrate.httpMethod, "POST")
-        let bodyData = try XCTUnwrap(Self.readBody(from: hydrate))
-        let json = try JSONSerialization.jsonObject(with: bodyData) as? [String: Any]
-        XCTAssertEqual(json?["jql"] as? String, "key in (\"ETS-4\", \"ETS-45\")")
+        // We expect exactly two JQL POSTs: the exact-key lookup and the hydrate.
+        XCTAssertEqual(jqlPOSTs.count, 2, "expected exact + hydrate POSTs, got \(jqlPOSTs.map(\.jql))")
+        XCTAssertTrue(jqlPOSTs.contains { $0.jql == "key = ETS-4 ORDER BY updated DESC" },
+                      "missing exact-key JQL in \(jqlPOSTs.map(\.jql))")
+        XCTAssertTrue(jqlPOSTs.contains { $0.jql == "key in (\"ETS-4\", \"ETS-45\")" },
+                      "missing hydrate JQL in \(jqlPOSTs.map(\.jql))")
 
+        // Merge should de-dupe ETS-4 and preserve exact-first ordering.
         XCTAssertEqual(issues.map(\.key), ["ETS-4", "ETS-45"])
         XCTAssertFalse(issues[0].isClosed)
         XCTAssertTrue(issues[1].isClosed)
+    }
+
+    func test_search_issueKey_findsTicketWhenPickerIsEmpty() async throws {
+        // Regression for the "brand-new ticket" failure mode: Jira's
+        // /issue/picker is history-biased and returns nothing for tickets
+        // the current user has never viewed, even if they typed the full
+        // correct key. The exact-key JQL safety net must still surface it.
+        MockURLProtocol.handler = { req in
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            if req.url?.path == "/rest/api/3/issue/picker" {
+                // Picker returns no sections / no issues.
+                return (resp, #"{"sections":[]}"#.data(using: .utf8)!)
+            }
+            // Exact-key JQL POST returns the ticket.
+            let body = #"{"issues":[{"key":"PSO-76963","fields":{"summary":"brand new","status":{"name":"To Do"},"issuetype":{"name":"Task"}}}]}"#.data(using: .utf8)!
+            return (resp, body)
+        }
+
+        let client = JiraClient(credentials: creds, session: .mocked())
+        let issues = try await client.search(.issueKey("PSO-76963"))
+
+        XCTAssertEqual(issues.map(\.key), ["PSO-76963"])
+        XCTAssertEqual(issues.first?.summary, "brand new")
     }
 
     func test_search_emptyInputSkipsNetwork() async throws {
