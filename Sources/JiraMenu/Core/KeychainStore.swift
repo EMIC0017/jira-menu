@@ -16,10 +16,45 @@ struct KeychainStore {
         case biometric
     }
 
-    enum KeychainError: Error {
+    enum KeychainError: LocalizedError {
         case unexpectedStatus(OSStatus)
         case accessControl(Error?)
         case userCancelled
+
+        /// Surface the actual OSStatus + its system-provided description so
+        /// failures are diagnosable instead of showing Swift's default
+        /// "Domain error 0" placeholder. Without this conformance Keychain
+        /// bugs are effectively opaque.
+        var errorDescription: String? {
+            switch self {
+            case .unexpectedStatus(let status):
+                let name = Self.osStatusName(status)
+                let msg  = (SecCopyErrorMessageString(status, nil) as String?) ?? "Keychain error"
+                return "\(msg) (\(name), OSStatus \(status))"
+            case .accessControl(let inner):
+                return "Access-control creation failed: \(inner?.localizedDescription ?? "unknown")"
+            case .userCancelled:
+                return "User cancelled Keychain authentication."
+            }
+        }
+
+        /// A short mnemonic for the most common Security framework statuses.
+        /// Helps pattern-match an error code at a glance without needing
+        /// to look up its hex representation.
+        private static func osStatusName(_ status: OSStatus) -> String {
+            switch status {
+            case errSecSuccess:             return "errSecSuccess"
+            case errSecDuplicateItem:       return "errSecDuplicateItem"
+            case errSecItemNotFound:        return "errSecItemNotFound"
+            case errSecAuthFailed:          return "errSecAuthFailed"
+            case errSecUserCanceled:        return "errSecUserCanceled"
+            case errSecInteractionNotAllowed: return "errSecInteractionNotAllowed"
+            case errSecMissingEntitlement:  return "errSecMissingEntitlement"
+            case errSecDecode:              return "errSecDecode"
+            case errSecParam:               return "errSecParam"
+            default:                        return "unknown"
+            }
+        }
     }
 
     init(service: String = "dev.ericmorin.jiramenu") {
@@ -38,16 +73,15 @@ struct KeychainStore {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
         ]
-        SecItemDelete(baseQuery as CFDictionary)
 
-        var attrs = baseQuery
-        attrs[kSecValueData as String] = data
-
+        // Protection-specific attributes — either an `Accessible` flag (for
+        // standard items) or a SecAccessControl (for biometric items).
+        var protectionAttrs: [String: Any] = [:]
         switch protection {
         case .standard:
             // "This device only" prevents iCloud Keychain / Time Machine migration
             // of what is effectively a per-device access token.
-            attrs[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+            protectionAttrs[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         case .biometric:
             var cfError: Unmanaged<CFError>?
             guard let ac = SecAccessControlCreateWithFlags(
@@ -58,11 +92,34 @@ struct KeychainStore {
             ) else {
                 throw KeychainError.accessControl(cfError?.takeRetainedValue())
             }
-            attrs[kSecAttrAccessControl as String] = ac
+            protectionAttrs[kSecAttrAccessControl as String] = ac
         }
 
-        let status = SecItemAdd(attrs as CFDictionary, nil)
-        guard status == errSecSuccess else { throw KeychainError.unexpectedStatus(status) }
+        // First try a plain Add. If an item already exists for this service
+        // (duplicate), fall through to Update. The naive "delete-then-add"
+        // pattern fails silently on biometric items because deletion of an
+        // ACL-protected item without an auth context returns errSecAuthFailed,
+        // leaving the stale item in place and making the subsequent Add
+        // collide. Try-Add-then-Update sidesteps that.
+        var addAttrs = baseQuery
+        addAttrs[kSecValueData as String] = data
+        for (k, v) in protectionAttrs { addAttrs[k] = v }
+
+        let addStatus = SecItemAdd(addAttrs as CFDictionary, nil)
+        if addStatus == errSecSuccess { return }
+        guard addStatus == errSecDuplicateItem else {
+            throw KeychainError.unexpectedStatus(addStatus)
+        }
+
+        // Duplicate → update. Update the data AND the protection attrs so
+        // toggling the biometric flag takes effect on existing items.
+        var updateAttrs: [String: Any] = [kSecValueData as String: data]
+        for (k, v) in protectionAttrs { updateAttrs[k] = v }
+        let updateStatus = SecItemUpdate(baseQuery as CFDictionary,
+                                          updateAttrs as CFDictionary)
+        guard updateStatus == errSecSuccess else {
+            throw KeychainError.unexpectedStatus(updateStatus)
+        }
     }
 
     /// Reads the stored credentials. If `prompt` is supplied and the item
