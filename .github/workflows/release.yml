@@ -57,26 +57,35 @@ jobs:
           chmod +x scripts/build-app.sh
           ./scripts/build-app.sh "$VERSION"
 
-      - name: Zip the .app
+      - name: Create DMG
         env:
           TAG: ${{ steps.version.outputs.tag }}
         run: |
+          # UDZO = zlib-compressed read-only DMG. Same approximate size as
+          # a `ditto`-style zip, but double-clickable for users who want to
+          # install by drag-and-drop instead of via Homebrew. The app
+          # bundle is the only thing on the DMG — no custom background or
+          # Applications alias yet (can be layered on later via
+          # `hdiutil create -srcfolder <staging-dir>`).
           cd build
-          ZIP_NAME="JiraMenu-$TAG.zip"
-          ditto -c -k --sequesterRsrc --keepParent JiraMenu.app "$ZIP_NAME"
-          echo "ZIP_PATH=build/$ZIP_NAME" >> "$GITHUB_ENV"
-          echo "ZIP_NAME=$ZIP_NAME"       >> "$GITHUB_ENV"
+          DMG_NAME="JiraMenu-$TAG.dmg"
+          hdiutil create -volname "JiraMenu" \
+                         -srcfolder JiraMenu.app \
+                         -ov -format UDZO \
+                         "$DMG_NAME"
+          echo "DMG_PATH=build/$DMG_NAME" >> "$GITHUB_ENV"
+          echo "DMG_NAME=$DMG_NAME"       >> "$GITHUB_ENV"
 
       - name: Compute sha256
         run: |
-          SHA256="$(shasum -a 256 "$ZIP_PATH" | awk '{print $1}')"
+          SHA256="$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')"
           echo "SHA256=$SHA256" >> "$GITHUB_ENV"
           echo "sha256: $SHA256"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ env.ZIP_PATH }}
+          files: ${{ env.DMG_PATH }}
           body: |
             Automated release build.
 
@@ -111,6 +120,12 @@ jobs:
           # BSD sed (macOS) needs the empty string after -i.
           sed -i '' -E "s/^  version \".*\"/  version \"$VERSION\"/" "$CASK"
           sed -i '' -E "s/^  sha256 \".*\"/  sha256 \"$SHA256\"/"    "$CASK"
+          # Ensure the cask url ends in .dmg (migration from zip → dmg).
+          # No-op once the cask already says .dmg, so it's safe to keep
+          # running on every release. Anchored to the `url` line only so
+          # it can't accidentally rewrite a .zip mention elsewhere in the
+          # file (there aren't any today, but be strict anyway).
+          sed -i '' -E '/^  url /s/\.zip"/.dmg"/' "$CASK"
 
           cd "$TAP_DIR"
           if git diff --quiet; then
