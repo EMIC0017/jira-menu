@@ -4,11 +4,20 @@ import SwiftUI
 /// "change credentials" form for later edits. Reads/writes via
 /// CredentialsStore so we don't thrash the Keychain.
 struct SettingsView: View {
+    // First-run defaults tuned for the Instacart team — the vast majority
+    // of users will work on this Jira Cloud tenant with an @instacart.com
+    // email, so save them the typing. Both fields stay fully editable for
+    // anyone who forks this (or works on a different tenant). If the user
+    // already has saved credentials, `onAppear` overwrites these with the
+    // saved values before the form renders.
+    private static let defaultSiteURL = "https://instacart.atlassian.net"
+    private static let emailPromptText = "yourname@instacart.com"
+
     let store: CredentialsStore
     let canCancel: Bool
     let onDone: () -> Void
 
-    @State private var siteURL: String = ""
+    @State private var siteURL: String = Self.defaultSiteURL
     @State private var email: String = ""
     @State private var apiToken: String = ""
     @State private var errorMessage: String?
@@ -34,7 +43,7 @@ struct SettingsView: View {
             Form {
                 TextField("Site URL", text: $siteURL, prompt: Text("https://acme.atlassian.net"))
                     .textFieldStyle(.roundedBorder)
-                TextField("Email", text: $email, prompt: Text("you@company.com"))
+                TextField("Email", text: $email, prompt: Text(Self.emailPromptText))
                     .textFieldStyle(.roundedBorder)
                 SecureField("API Token", text: $apiToken, prompt: Text("paste token"))
                     .textFieldStyle(.roundedBorder)
